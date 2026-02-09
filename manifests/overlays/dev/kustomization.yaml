@@ -1,0 +1,29 @@
+# manifests/overlays/dev/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: dev
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - patch.yaml
+
+images:
+  - name: sample-app
+    newTag: dev
+
+configMapGenerator:
+  - name: sample-app-config
+    behavior: replace
+    literals:
+      - APP_ENV=development
+      - LOG_LEVEL=debug
+      - APP_VERSION=dev
+
+secretGenerator:
+  - name: sample-app-secret
+    behavior: replace
+    literals:
+      - DB_PASSWORD=dev-secret-password

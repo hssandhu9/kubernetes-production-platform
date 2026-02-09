@@ -1,0 +1,29 @@
+# manifests/overlays/stage/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: stage
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - patch.yaml
+
+images:
+  - name: sample-app
+    newTag: stage
+
+configMapGenerator:
+  - name: sample-app-config
+    behavior: replace
+    literals:
+      - APP_ENV=staging
+      - LOG_LEVEL=info
+      - APP_VERSION=stage
+
+secretGenerator:
+  - name: sample-app-secret
+    behavior: replace
+    literals:
+      - DB_PASSWORD=stage-secret-password

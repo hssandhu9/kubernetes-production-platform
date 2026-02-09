@@ -1,0 +1,26 @@
+# manifests/base/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+
+configMapGenerator:
+  - name: sample-app-config
+    literals:
+      - APP_ENV=development
+      - LOG_LEVEL=info
+      - APP_VERSION=1.0.0
+
+secretGenerator:
+  - name: sample-app-secret
+    literals:
+      - DB_PASSWORD=changeme
+
+commonLabels:
+  app: sample-app
+  managed-by: kustomize

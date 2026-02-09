@@ -1,0 +1,8 @@
+# manifests/overlays/stage/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stage
+  labels:
+    environment: staging
+    monitoring: enabled

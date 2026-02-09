@@ -1,0 +1,29 @@
+# manifests/overlays/prod/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: prod
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - patch.yaml
+
+images:
+  - name: sample-app
+    newTag: v1.0.0
+
+configMapGenerator:
+  - name: sample-app-config
+    behavior: replace
+    literals:
+      - APP_ENV=production
+      - LOG_LEVEL=info
+      - APP_VERSION=v1.0.0
+
+secretGenerator:
+  - name: sample-app-secret
+    behavior: replace
+    literals:
+      - DB_PASSWORD=prod-secure-password-change-me
