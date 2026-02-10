@@ -1,0 +1,13 @@
+# Super-Linter ignore patterns
+.git/
+.github/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.log

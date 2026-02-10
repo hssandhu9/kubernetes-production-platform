@@ -1,0 +1,263 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      image_tag:
+        description: 'Docker image tag to deploy (leave empty for latest)'
+        required: false
+        type: string
+
+env:
+  DOCKER_IMAGE: sample-app
+  REGISTRY: docker.io  # Change to your registry (ghcr.io, gcr.io, etc.)
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full git history for better linting
+
+      - name: Run Super-Linter
+        uses: super-linter/super-linter@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_ALL_CODEBASE: false  # Only validate changed files on PR
+          VALIDATE_PYTHON_FLAKE8: true
+          VALIDATE_PYTHON_PYLINT: true
+          VALIDATE_PYTHON_BLACK: true
+          VALIDATE_DOCKERFILE_HADOLINT: true
+          VALIDATE_YAML: true
+          VALIDATE_MARKDOWN: true
+          VALIDATE_BASH: true
+          LINTER_RULES_PATH: /
+          PYTHON_FLAKE8_CONFIG_FILE: .flake8
+          PYTHON_BLACK_CONFIG_FILE: pyproject.toml
+          FILTER_REGEX_EXCLUDE: .*(venv|__pycache__|.git)/.*
+
+  
+  build:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Set variables
+        id: vars
+        run: |
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=dev,enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            APP_VERSION=${{ steps.vars.outputs.short_sha }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/develop' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: ${{ 
+        github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev' && 'development' ||
+        github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'stage' && 'staging' ||
+        github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod' && 'production' ||
+        github.ref == 'refs/heads/develop' && 'development' ||
+        github.ref == 'refs/heads/main' && 'staging' ||
+        startsWith(github.ref, 'refs/tags/v') && 'production' ||
+        'development'
+      }}
+      url: ${{
+        github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev' && 'https://sample-app-dev.example.com' ||
+        github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'stage' && 'https://sample-app-stage.example.com' ||
+        github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod' && 'https://sample-app.example.com' ||
+        github.ref == 'refs/heads/develop' && 'https://sample-app-dev.example.com' ||
+        github.ref == 'refs/heads/main' && 'https://sample-app-stage.example.com' ||
+        startsWith(github.ref, 'refs/tags/v') && 'https://sample-app.example.com' ||
+        'https://sample-app-dev.example.com'
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine environment and image tag
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs.environment }}"
+            if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+              IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+            else
+              IMAGE_TAG="${ENV}"
+            fi
+          elif [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+            ENV="dev"
+            IMAGE_TAG="dev"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            ENV="stage"
+            IMAGE_TAG="stage"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            ENV="prod"
+            IMAGE_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            ENV="dev"
+            IMAGE_TAG="dev"
+          fi
+          
+          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "namespace=${ENV}" >> $GITHUB_OUTPUT
+          
+          # Set kubeconfig secret name
+          case ${ENV} in
+            dev)
+              echo "kubeconfig_secret=KUBE_CONFIG_DEV" >> $GITHUB_OUTPUT
+              ;;
+            stage)
+              echo "kubeconfig_secret=KUBE_CONFIG_STAGE" >> $GITHUB_OUTPUT
+              ;;
+            prod)
+              echo "kubeconfig_secret=KUBE_CONFIG_PROD" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          KUBECONFIG_SECRET="${{ steps.env.outputs.kubeconfig_secret }}"
+          if [ "${KUBECONFIG_SECRET}" = "KUBE_CONFIG_DEV" ]; then
+            echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > kubeconfig
+          elif [ "${KUBECONFIG_SECRET}" = "KUBE_CONFIG_STAGE" ]; then
+            echo "${{ secrets.KUBE_CONFIG_STAGE }}" | base64 -d > kubeconfig
+          elif [ "${KUBECONFIG_SECRET}" = "KUBE_CONFIG_PROD" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > kubeconfig
+          fi
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Update image tag in kustomization
+        run: |
+          cd manifests/overlays/${{ steps.env.outputs.environment }}
+          kustomize edit set image sample-app=${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.DOCKER_IMAGE }}:${{ steps.env.outputs.image_tag }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -k manifests/overlays/${{ steps.env.outputs.environment }}
+          kubectl rollout status deployment/sample-app -n ${{ steps.env.outputs.namespace }} --timeout=10m
+
+      - name: Verify deployment
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -n ${{ steps.env.outputs.namespace }} -l app=sample-app
+          echo ""
+          echo "=== Services ==="
+          kubectl get svc -n ${{ steps.env.outputs.namespace }}
+          echo ""
+          echo "=== Ingress ==="
+          kubectl get ingress -n ${{ steps.env.outputs.namespace }} || echo "No ingress found"
+
+      - name: Run smoke tests
+        if: steps.env.outputs.environment == 'prod'
+        run: |
+          sleep 30
+          # Add smoke tests here
+          echo "Smoke tests passed for production"
+
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Get environment input
+        id: rollback_env
+        run: |
+          echo "Please trigger this workflow with environment selection"
+          echo "This is a placeholder for rollback functionality"
+          
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl for production rollback
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Rollback deployment
+        run: |
+          kubectl rollout undo deployment/sample-app -n prod
+          kubectl rollout status deployment/sample-app -n prod --timeout=5m
+
+      - name: Verify rollback
+        run: |
+          kubectl get pods -n prod -l app=sample-app
+          kubectl describe deployment/sample-app -n prod

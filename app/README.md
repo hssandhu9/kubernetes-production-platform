@@ -152,4 +152,4 @@ To extend this API:
 3. Add authentication (JWT, OAuth2)
 4. Implement rate limiting
 5. Add request tracing (OpenTelemetry)
-6. Set up CI/CD pipeline
+
